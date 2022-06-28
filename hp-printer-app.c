@@ -12,6 +12,7 @@
 //
 
 # include <pappl/pappl.h>
+# include <gutenprint/gutenprint.h>
 # include "icons.h"
 # include <math.h>
 
@@ -312,17 +313,17 @@ typedef struct pcl_map_s		// PCL name to code map
 //
 // Local globals...
 //
+static pappl_pr_driver_t *drivers ; // Driver information
+   /* name */          /* description */	/* device ID */	/* extension */
+//   { "hp_deskjet",	"HP Deskjet series",	NULL,		NULL },
+//   { "hp_generic",	"Generic PCL 5",	"CMD:PCL;",	NULL },
+// #if WITH_PCL6
+//   { "hp_generic6",	"Generic PCL 6/XL",	NULL,		NULL },
+//   { "hp_generic6c",	"Generic Color PCL 6/XL", "CMD:PCLXL;",	NULL },
+// #endif // WITH_PCL6
+//   { "hp_laserjet",	"HP LaserJet series",	NULL,		NULL },
 
-static pappl_pr_driver_t pcl_drivers[] =   // Driver information
-{   /* name */          /* description */	/* device ID */	/* extension */
-  { "hp_deskjet",	"HP Deskjet series",	NULL,		NULL },
-  { "hp_generic",	"Generic PCL 5",	"CMD:PCL;",	NULL },
-#if WITH_PCL6
-  { "hp_generic6",	"Generic PCL 6/XL",	NULL,		NULL },
-  { "hp_generic6c",	"Generic Color PCL 6/XL", "CMD:PCLXL;",	NULL },
-#endif // WITH_PCL6
-  { "hp_laserjet",	"HP LaserJet series",	NULL,		NULL },
-};
+
 
 static const char * const pcl_hp_deskjet_media[] =
 {       // Supported media sizes for HP Deskjet printers
@@ -390,6 +391,7 @@ static bool	pcl_rwriteline(pappl_job_t *job, pappl_pr_options_t *options, pappl_
 static void	pcl_setup(pappl_system_t *system);
 static bool	pcl_status(pappl_printer_t *printer);
 static bool	pcl_update_status(pappl_printer_t *printer, pappl_device_t *device);
+static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *data);
 #if WITH_PCL6
 static void	pcl6_write_command(pappl_device_t *device, enum pcl6_cmd command);
 static void	pcl6_write_data(pappl_device_t *device, const unsigned char *buffer, size_t length);
@@ -408,18 +410,119 @@ static void	pcl6_write_xy(pappl_device_t *device, unsigned x, unsigned y, enum p
 int
 main(int  argc,				// I - Number of command-line arguments
      char *argv[])			// I - Command-line arguments
-{
+{  
+  stp_init();
   return (papplMainloop(argc, argv,
                         VERSION,
                         "Copyright &copy; 2020-2022 by Michael R Sweet. Provided under the terms of the <a href=\"https://www.apache.org/licenses/LICENSE-2.0\">Apache License 2.0</a>.",
-                        (int)(sizeof(pcl_drivers) / sizeof(pcl_drivers[0])),
-                        pcl_drivers, pcl_autoadd, pcl_callback,
+                        stp_printer_model_count(),
+                        drivers, pcl_autoadd, pcl_callback,
                         /*subcmd_name*/NULL, /*subcmd_cb*/NULL,
-                        /*system_cb*/NULL,
+                        /*system_cb*/system_cb,
                         /*usage_cb*/NULL,
                         /*data*/NULL));
 }
 
+//
+// 'driver_list_setup' - Populate Drivers' list
+//
+
+void driver_list_setup() 
+{ 
+  const stp_printer_t *printer;
+  int drivers_count = stp_printer_model_count();
+  drivers = (pappl_pr_driver_t *)calloc(drivers_count,sizeof(pappl_pr_driver_t));
+  for (int i = 0; i< drivers_count ; i++)
+  {
+     if ((printer = stp_get_printer_by_index(i)) != NULL)
+     {
+       const char  *device_id = stp_printer_get_device_id(printer);
+       const char *driver_name =  stp_printer_get_driver(printer);
+       const char *des = stp_printer_get_long_name(printer);
+       drivers[i].device_id = device_id;
+       drivers[i].description = des;
+       drivers[i].name= driver_name;
+       drivers[i].extension= NULL;
+
+     }
+  }
+
+
+}
+
+//
+// 'system_cb()' - System Callback
+//
+
+static pappl_system_t *			// O - System object
+system_cb(
+    int           num_options,		// I - Number options
+    cups_option_t *options,		// I - Options
+    void          *data)		// I - Callback data (unused)
+{
+  pappl_system_t	*system;	// System object
+  const char		*val,		// Current option value
+			*hostname,	// Hostname, if any
+			*logfile,	// Log file, if any
+			*system_name;	// System name, if any
+  pappl_loglevel_t	loglevel;	// Log level
+  int			port = 0;	// Port number, if any
+  pappl_soptions_t	soptions = PAPPL_SOPTIONS_MULTI_QUEUE | PAPPL_SOPTIONS_WEB_INTERFACE | PAPPL_SOPTIONS_WEB_LOG | PAPPL_SOPTIONS_WEB_SECURITY;
+  
+
+   // Enable/disable TLS...
+  if ((val = cupsGetOption("tls", num_options, options)) != NULL && !strcmp(val, "no"))
+    soptions |= PAPPL_SOPTIONS_NO_TLS;
+
+  // Parse standard log and server options...
+  if ((val = cupsGetOption("log-level", num_options, options)) != NULL)
+  {
+    if (!strcmp(val, "fatal"))
+      loglevel = PAPPL_LOGLEVEL_FATAL;
+    else if (!strcmp(val, "error"))
+      loglevel = PAPPL_LOGLEVEL_ERROR;
+    else if (!strcmp(val, "warn"))
+      loglevel = PAPPL_LOGLEVEL_WARN;
+    else if (!strcmp(val, "info"))
+      loglevel = PAPPL_LOGLEVEL_INFO;
+    else if (!strcmp(val, "debug"))
+      loglevel = PAPPL_LOGLEVEL_DEBUG;
+    else
+    {
+      fprintf(stderr, "lprint: Bad log-level value '%s'.\n", val);
+      return (NULL);
+    }
+  }
+  else
+    loglevel = PAPPL_LOGLEVEL_UNSPEC;
+
+  logfile     = cupsGetOption("log-file", num_options, options);
+  hostname    = cupsGetOption("server-hostname", num_options, options);
+  system_name = cupsGetOption("system-name", num_options, options);
+
+  if ((val = cupsGetOption("server-port", num_options, options)) != NULL)
+  {
+    if (!isdigit(*val & 255))
+    {
+      fprintf(stderr, "lprint: Bad server-port value '%s'.\n", val);
+      return (NULL);
+    }
+    else
+      port = atoi(val);
+  }
+  
+    // Create the system object...
+  if ((system = papplSystemCreate(soptions, system_name ? system_name : "LPrint", port, "_print,_universal", cupsGetOption("spool-directory", num_options, options), logfile ? logfile : "-", loglevel, cupsGetOption("auth-service", num_options, options), /* tls_only */false)) == NULL)
+    return (NULL);
+   
+   //Setup drivers list
+  driver_list_setup();
+  
+  
+  
+  
+  
+  }
 
 //
 // 'pcl_autoadd()' - Auto-add PCL printers.
@@ -432,39 +535,33 @@ pcl_autoadd(const char *device_info,	// I - Device name
             void       *data)		// I - Callback data (not used)
 {
   const char	*ret = NULL;		// Return value
-  int		num_did;		// Number of device ID key/value pairs
-  cups_option_t	*did;			// Device ID key/value pairs
-  const char	*cmd,			// Command set value
-		*pcl;			// PCL command set pointer
+   int		num_did;		// Number of device ID key/value pairs
+   cups_option_t	*did;			// Device ID key/value pairs
+  
 
-
-  // Parse the IEEE-1284 device ID to see if this is a printer we support...
+ 
+  const char *make,*model ;
   num_did = papplDeviceParseID(device_id, &did);
 
-  // Look at the COMMAND SET (CMD) key for the list of printer languages,,,
-  if ((cmd = cupsGetOption("COMMAND SET", num_did, did)) == NULL)
-    cmd = cupsGetOption("CMD", num_did, did);
-
-  if (cmd && (pcl = strstr(cmd, "PCL")) != NULL && (pcl[3] == ',' || !pcl[3]))
-  {
-    // Printer supports HP PCL, now look at the MODEL (MDL) string to see if
-    // it is one of the HP models or a generic PCL printer...
-    const char *mdl;			// Model name string
-
-    if ((mdl = cupsGetOption("MODEL", num_did, did)) == NULL)
-      mdl = cupsGetOption("MDL", num_did, did);
-
-    if (mdl && (strstr(mdl, "DeskJet") || strstr(mdl, "Photosmart")))
-      ret = "hp_deskjet";		// HP DeskJet/Photosmart printer
-    else if (mdl && strstr(mdl, "LaserJet"))
-      ret = "hp_laserjet";		// HP LaserJet printer
-    else
-      ret = "hp_generic";		// Some other PCL laser printer
+  make = cupsGetOption("MANUFACTURER", num_did, did) != NULL ? cupsGetOption("MANUFACTURER", num_did, did) : cupsGetOption("MFG", num_did, did);
+  model = cupsGetOption("MFG", num_did, did) != NULL ? cupsGetOption("MODEL", num_did, did) : cupsGetOption("MDL", num_did, did);
+ 
+  for (int i=0 ; i< stp_printer_model_count(); i++) {
+    cups_option_t *driver_pairs;
+      int pairs = PappleDeviceParseID(drivers[i].device_id, &driver_pairs);
+      const  char *d_make= cupsGetOption("MANUFACTURER", pairs, driver_pairs) != NULL ? cupsGetOption("MANUFACTURER",pairs, driver_pairs) : cupsGetOption("MFG", pairs,driver_pairs);
+      const char *d_model = cupsGetOption("MFG",  pairs, driver_pairs) != NULL ? cupsGetOption("MODEL",  pairs, driver_pairs) : cupsGetOption("MDL",  pairs, driver_pairs);
+      if (!strcasecmp(make, d_make)&&!strcasecmp(model, d_model))
+      {
+        ret=drivers[i].name;
+        break;
+      }
+      cupsFreeOptions(pairs,driver_pairs);
   }
 
   cupsFreeOptions(num_did, did);
 
-  return (ret);
+   return (ret);
 }
 
 
@@ -483,61 +580,62 @@ pcl_callback(
 					// O - Driver attributes (not used)
     void                   *data)	// I - Callback data (not used)
 {
-  int   i, j;				// Looping variables
-  static pappl_dither_t	dither =	// Blue-noise dither array
-  {
-    { 111,  49, 142, 162, 113, 195,  71, 177, 201,  50, 151,  94,  66,  37,  85, 252 },
-    {  25,  99, 239, 222,  32, 250, 148,  19,  38, 106, 220, 170, 194, 138,  13, 167 },
-    { 125, 178,  79,  15,  65, 173, 123,  87, 213, 131, 247,  23, 116,  54, 229, 212 },
-    {  41, 202, 152, 132, 189, 104,  53, 236, 161,  62,   1, 181,  77, 241, 147,  68 },
-    {   2, 244,  56,  91, 230,   5, 204,  28, 187, 101, 144, 206,  33,  92, 190, 107 },
-    { 223, 164, 114,  36, 214, 156, 139,  70, 245,  84, 226,  48, 126, 158,  17, 135 },
-    {  83, 196,  21, 254,  76,  45, 179, 115,  12,  40, 169, 105, 253, 176, 211,  59 },
-    { 100, 180, 145, 122, 172,  97, 235, 129, 215, 149, 199,   8,  72,  26, 238,  44 },
-    { 232,  31,  69,  11, 205,  58,  18, 193,  88,  60, 112, 221, 140,  86, 120, 153 },
-    { 208, 130, 243, 160, 224, 110,  34, 248, 165,  24, 234, 184,  52, 198, 171,   6 },
-    { 108, 188,  51,  89, 137, 186, 154,  78,  47, 134,  98, 157,  35, 249,  95,  63 },
-    {  16,  75, 219,  39,   0,  67, 228, 121, 197, 240,   3,  74, 127,  20, 227, 143 },
-    { 246, 175, 119, 200, 251, 103, 146,  14, 209, 174, 109, 218, 192,  82, 203, 163 },
-    {  29,  93, 150,  22, 166, 182,  55,  30,  90,  64,  42, 141, 168,  57, 117,  46 },
-    { 216, 233,  61, 128,  81, 237, 217, 118, 159, 255, 185,  27, 242, 102,   4, 133 },
-    {  73, 191,   9, 210,  43,  96,   7, 136, 231,  80,  10, 124, 225, 207, 155, 183 }
-  };
+  // int   i, j;				// Looping variables
+  // static pappl_dither_t	dither =	// Blue-noise dither array
+  // {
+  //   { 111,  49, 142, 162, 113, 195,  71, 177, 201,  50, 151,  94,  66,  37,  85, 252 },
+  //   {  25,  99, 239, 222,  32, 250, 148,  19,  38, 106, 220, 170, 194, 138,  13, 167 },
+  //   { 125, 178,  79,  15,  65, 173, 123,  87, 213, 131, 247,  23, 116,  54, 229, 212 },
+  //   {  41, 202, 152, 132, 189, 104,  53, 236, 161,  62,   1, 181,  77, 241, 147,  68 },
+  //   {   2, 244,  56,  91, 230,   5, 204,  28, 187, 101, 144, 206,  33,  92, 190, 107 },
+  //   { 223, 164, 114,  36, 214, 156, 139,  70, 245,  84, 226,  48, 126, 158,  17, 135 },
+  //   {  83, 196,  21, 254,  76,  45, 179, 115,  12,  40, 169, 105, 253, 176, 211,  59 },
+  //   { 100, 180, 145, 122, 172,  97, 235, 129, 215, 149, 199,   8,  72,  26, 238,  44 },
+  //   { 232,  31,  69,  11, 205,  58,  18, 193,  88,  60, 112, 221, 140,  86, 120, 153 },
+  //   { 208, 130, 243, 160, 224, 110,  34, 248, 165,  24, 234, 184,  52, 198, 171,   6 },
+  //   { 108, 188,  51,  89, 137, 186, 154,  78,  47, 134,  98, 157,  35, 249,  95,  63 },
+  //   {  16,  75, 219,  39,   0,  67, 228, 121, 197, 240,   3,  74, 127,  20, 227, 143 },
+  //   { 246, 175, 119, 200, 251, 103, 146,  14, 209, 174, 109, 218, 192,  82, 203, 163 },
+  //   {  29,  93, 150,  22, 166, 182,  55,  30,  90,  64,  42, 141, 168,  57, 117,  46 },
+  //   { 216, 233,  61, 128,  81, 237, 217, 118, 159, 255, 185,  27, 242, 102,   4, 133 },
+  //   {  73, 191,   9, 210,  43,  96,   7, 136, 231,  80,  10, 124, 225, 207, 155, 183 }
+  // };
 
 
   (void)data;
   (void)device_uri;
-  (void)device_id;
   (void)driver_attrs;
 
 
-  // Set dither arrays...
-  for (i = 0; i < 16; i ++)
-  {
-    // Apply gamma correction to dither array...
-    for (j = 0; j < 16; j ++)
-      driver_data->gdither[i][j] = 255 - (int)(255.0 * pow(1.0 - dither[i][j] / 255.0, 0.4545));
-  }
+  // // Set dither arrays...
+  // for (i = 0; i < 16; i ++)
+  // {
+  //   // Apply gamma correction to dither array...
+  //   for (j = 0; j < 16; j ++)
+  //     driver_data->gdither[i][j] = 255 - (int)(255.0 * pow(1.0 - dither[i][j] / 255.0, 0.4545));
+  // }
 
   // Same dither array for photo as well...
-  memcpy(driver_data->pdither, driver_data->gdither, sizeof(driver_data->pdither));
+  // memcpy(driver_data->pdither, driver_data->gdither, sizeof(driver_data->pdither));
 
   /* Set callbacks */
-  driver_data->printfile_cb  = pcl_print;
+  driver_data->printfile_cb  = NULL;
   driver_data->rendjob_cb    = pcl_rendjob;
   driver_data->rendpage_cb   = pcl_rendpage;
   driver_data->rstartjob_cb  = pcl_rstartjob;
   driver_data->rstartpage_cb = pcl_rstartpage;
   driver_data->rwriteline_cb = pcl_rwriteline;
   driver_data->status_cb     = pcl_status;
-  driver_data->has_supplies  = true;
+  driver_data->has_supplies  = false;
 
   /* Native format */
-  driver_data->format = "application/vnd.hp-pcl";
+  driver_data->format = "application/vnd.printer-specific";
 
   /* Default orientation and quality */
   driver_data->orient_default  = IPP_ORIENT_NONE;
   driver_data->quality_default = IPP_QUALITY_NORMAL;
+  
+  //Set the driver
 
   if (!strcmp(driver_name, "hp_deskjet"))
   {
@@ -628,7 +726,7 @@ pcl_callback(
     driver_data->x_resolution[1] = 600;
     driver_data->y_resolution[1] = 600;
     driver_data->x_default = driver_data->y_default = 300;
-
+//black and white printer driver
     driver_data->raster_types = PAPPL_PWG_RASTER_TYPE_BLACK_1 | PAPPL_PWG_RASTER_TYPE_BLACK_8 | PAPPL_PWG_RASTER_TYPE_SGRAY_8;
 
     driver_data->color_supported = PAPPL_COLOR_MODE_MONOCHROME;

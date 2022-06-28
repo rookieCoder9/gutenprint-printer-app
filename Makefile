@@ -26,9 +26,9 @@ unitdir 	=	`pkg-config --variable=systemdsystemunitdir systemd`
 # Compiler/linker options...
 CSFLAGS		=	-s "$${CODESIGN_IDENTITY:=-}" --timestamp -o runtime
 CFLAGS		=	$(CPPFLAGS) $(OPTIM)
-CPPFLAGS	=	'-DVERSION="$(VERSION)"' `pkg-config --cflags cups` `pkg-config --cflags pappl` $(OPTIONS)
+CPPFLAGS	=	'-DVERSION="$(VERSION)"' `pkg-config --cflags cups` `pkg-config --cflags pappl` `pkg-config --cflags gutenprint`  $(OPTIONS)
 LDFLAGS		=	$(OPTIM) `cups-config --ldflags`
-LIBS		=	`pkg-config --libs pappl` `pkg-config --libs cups`
+LIBS		=	`pkg-config --libs pappl` `pkg-config --libs cups` `pkg-config --libs gutenprint`  -lm
 OPTIM		=	-Os -g
 # Uncomment the following line to enable experimental PCL 6 support
 #OPTIONS	=	-DWITH_PCL6=1
