@@ -905,6 +905,7 @@ pcl_callback(
 
   // Duplex Mode
   driver_data->sides_supported = PAPPL_SIDES_ONE_SIDED;
+  driver_data->duplex = PAPPL_DUPLEX_NONE;
   stp_describe_parameter(v, "Duplex", &desc);
   if (desc.is_active && desc.p_type == STP_PARAMETER_TYPE_STRING_LIST)
   {
@@ -944,12 +945,12 @@ pcl_callback(
           if (strcmp(opt->name, "DuplexTumble") == 0)
           {
             driver_data->sides_supported = driver_data->sides_supported | PAPPL_SIDES_TWO_SIDED_SHORT_EDGE;
-            driver_data->duplex = driver_data->duplex | PAPPL_DUPLEX_FLIPPED;
+            driver_data->duplex = PAPPL_DUPLEX_NORMAL;
           }
           else if (strcmp(opt->name, "DuplexNoTumble") == 0)
           {
             driver_data->sides_supported = driver_data->sides_supported | PAPPL_SIDES_TWO_SIDED_LONG_EDGE;
-            driver_data->duplex = driver_data->duplex | PAPPL_DUPLEX_NORMAL;
+            driver_data->duplex = PAPPL_DUPLEX_NORMAL;
           }
         }
       }
@@ -961,8 +962,8 @@ pcl_callback(
     }
   }
   stp_parameter_description_destroy(&desc);
-  driver_data->icons[0].data = hp_deskjet_sm_png;
-  driver_data->icons[0].datalen = sizeof(hp_deskjet_sm_png);
+  driver_data->icons.data = hp_deskjet_sm_png;
+  driver_data->icons.datalen = sizeof(hp_deskjet_sm_png);
 
   // Fill out ready and default media (default == ready media from the first source)
 
